@@ -1,0 +1,290 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+struct Node
+{
+    int key;
+    struct Node *left;
+    struct Node *right;
+    int height;
+};
+
+int height(struct Node *node)
+{
+    if (node == NULL)
+        return 0;
+    return node->height;
+}
+
+int max(int a, int b)
+{
+    return (a > b) ? a : b;
+}
+
+struct Node *createNode(int key)
+{
+    struct Node *node = (struct Node *)malloc(sizeof(struct Node));
+
+    node->key = key;
+    node->left = NULL;
+    node->right = NULL;
+    node->height = 1;
+
+    return node;
+}
+
+struct Node *rightRotate(struct Node *y)
+{
+    struct Node *x = y->left;
+    struct Node *temp = x->right;
+
+    x->right = y;
+    y->left = temp;
+
+    y->height = 1 + max(height(y->left), height(y->right));
+    x->height = 1 + max(height(x->left), height(x->right));
+
+    return x;
+}
+
+struct Node *leftRotate(struct Node *x)
+{
+    struct Node *y = x->right;
+    struct Node *temp = y->left;
+
+    y->left = x;
+    x->right = temp;
+
+    x->height = 1 + max(height(x->left), height(x->right));
+    y->height = 1 + max(height(y->left), height(y->right));
+
+    return y;
+}
+
+int getBalance(struct Node *node)
+{
+    if (node == NULL)
+        return 0;
+
+    return height(node->left) - height(node->right);
+}
+
+/* Insert an element */
+struct Node *insert(struct Node *node, int key)
+{
+    int balance;
+
+    if (node == NULL)
+        return createNode(key);
+
+    if (key < node->key)
+        node->left = insert(node->left, key);
+    else if (key > node->key)
+        node->right = insert(node->right, key);
+    else
+        return node;
+
+    node->height = 1 + max(height(node->left), height(node->right));
+
+    balance = getBalance(node);
+
+    /* Left Left Case */
+    if (balance > 1 && key < node->left->key)
+        return rightRotate(node);
+
+    /* Right Right Case */
+    if (balance < -1 && key > node->right->key)
+        return leftRotate(node);
+
+    /* Left Right Case */
+    if (balance > 1 && key > node->left->key)
+    {
+        node->left = leftRotate(node->left);
+        return rightRotate(node);
+    }
+
+    /* Right Left Case */
+    if (balance < -1 && key < node->right->key)
+    {
+        node->right = rightRotate(node->right);
+        return leftRotate(node);
+    }
+
+    return node;
+}
+
+struct Node *minValueNode(struct Node *node)
+{
+    struct Node *current = node;
+
+    while (current->left != NULL)
+        current = current->left;
+
+    return current;
+}
+
+/* Delete an element */
+struct Node *deleteNode(struct Node *root, int key)
+{
+    int balance;
+    struct Node *temp;
+
+    if (root == NULL)
+        return root;
+
+    if (key < root->key)
+        root->left = deleteNode(root->left, key);
+    else if (key > root->key)
+        root->right = deleteNode(root->right, key);
+    else
+    {
+        if (root->left == NULL || root->right == NULL)
+        {
+            temp = root->left ? root->left : root->right;
+
+            if (temp == NULL)
+            {
+                temp = root;
+                root = NULL;
+            }
+            else
+            {
+                *root = *temp;
+            }
+
+            free(temp);
+        }
+        else
+        {
+            temp = minValueNode(root->right);
+
+            root->key = temp->key;
+
+            root->right = deleteNode(root->right, temp->key);
+        }
+    }
+
+    if (root == NULL)
+        return root;
+
+    root->height = 1 + max(height(root->left), height(root->right));
+
+    balance = getBalance(root);
+
+    /* Left Left Case */
+    if (balance > 1 && getBalance(root->left) >= 0)
+        return rightRotate(root);
+
+    /* Left Right Case */
+    if (balance > 1 && getBalance(root->left) < 0)
+    {
+        root->left = leftRotate(root->left);
+        return rightRotate(root);
+    }
+
+    /* Right Right Case */
+    if (balance < -1 && getBalance(root->right) <= 0)
+        return leftRotate(root);
+
+    /* Right Left Case */
+    if (balance < -1 && getBalance(root->right) > 0)
+    {
+        root->right = rightRotate(root->right);
+        return leftRotate(root);
+    }
+
+    return root;
+}
+
+/* Search for a key */
+struct Node *search(struct Node *root, int key)
+{
+    if (root == NULL || root->key == key)
+        return root;
+
+    if (key < root->key)
+        return search(root->left, key);
+
+    return search(root->right, key);
+}
+
+/* Inorder traversal */
+void inorder(struct Node *root)
+{
+    if (root != NULL)
+    {
+        inorder(root->left);
+        printf("%d ", root->key);
+        inorder(root->right);
+    }
+}
+
+int main()
+{
+    struct Node *root = NULL;
+    struct Node *result;
+    int choice, key;
+
+    while (1)
+    {
+        printf("\n\n--- AVL TREE OPERATIONS ---\n");
+        printf("1. Insert\n");
+        printf("2. Delete\n");
+        printf("3. Search\n");
+        printf("4. Display\n");
+        printf("5. Exit\n");
+
+        printf("Enter your choice: ");
+        scanf("%d", &choice);
+
+        switch (choice)
+        {
+        case 1:
+            printf("Enter element to insert: ");
+            scanf("%d", &key);
+
+            root = insert(root, key);
+            printf("Element inserted successfully.\n");
+            break;
+
+        case 2:
+            printf("Enter element to delete: ");
+            scanf("%d", &key);
+
+            if (search(root, key) == NULL)
+                printf("Element not found.\n");
+            else
+            {
+                root = deleteNode(root, key);
+                printf("Element deleted successfully.\n");
+            }
+            break;
+
+        case 3:
+            printf("Enter key element to search: ");
+            scanf("%d", &key);
+
+            result = search(root, key);
+
+            if (result != NULL)
+                printf("Element %d found in AVL tree.\n", key);
+            else
+                printf("Element %d not found in AVL tree.\n", key);
+            break;
+
+        case 4:
+            printf("Inorder traversal: ");
+            inorder(root);
+            printf("\n");
+            break;
+
+        case 5:
+            exit(0);
+
+        default:
+            printf("Invalid choice.\n");
+        }
+    }
+
+    return 0;
+}
