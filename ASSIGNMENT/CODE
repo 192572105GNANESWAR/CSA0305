@@ -1,0 +1,614 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <limits.h>
+#include <time.h>
+
+#define MAX_NODES 12
+#define MAX_ZONES 6
+#define MAX_WAREHOUSES 3
+#define MAX_HEAP 32
+#define MAX_CACHE 32
+#define INF 1000000000
+
+typedef struct {
+    int to, distance, capacity;
+} Edge;
+
+typedef struct {
+    Edge edges[MAX_NODES][MAX_NODES];
+    int count[MAX_NODES];
+} Graph;
+
+typedef struct {
+    char name[8];
+    int stock;
+} Warehouse;
+
+typedef struct {
+    char id[8], name[32];
+    int node, demand, urgency, served, waiting;
+    double priority;
+} ZoneRequest;
+
+typedef struct {
+    int zoneIndex, score;
+} HeapItem;
+
+typedef struct {
+    HeapItem a[MAX_HEAP];
+    int size;
+} MaxHeap;
+
+typedef struct {
+    int zoneNode, warehouseNode, load, distance, nextNode;
+    int valid;
+} RouteCache;
+
+RouteCache cache[MAX_CACHE];
+int cacheCount = 0;
+
+/* Add an undirected edge */
+void addEdge(Graph *g, int u, int v, int d, int c) {
+    g->edges[u][g->count[u]++] = (Edge){v, d, c};
+    g->edges[v][g->count[v]++] = (Edge){u, d, c};
+}
+
+/* Initialize Max Heap */
+void heapInit(MaxHeap *h) {
+    h->size = 0;
+}
+
+/* Insert into Max Heap */
+void heapPush(MaxHeap *h, int zoneIndex, int score) {
+    int i = h->size++;
+
+    h->a[i] = (HeapItem){zoneIndex, score};
+
+    while (i > 0) {
+        int p = (i - 1) / 2;
+
+        if (h->a[p].score >= h->a[i].score)
+            break;
+
+        HeapItem t = h->a[p];
+        h->a[p] = h->a[i];
+        h->a[i] = t;
+
+        i = p;
+    }
+}
+
+/* Remove highest priority item */
+HeapItem heapPop(MaxHeap *h) {
+    HeapItem top = h->a[0];
+
+    h->a[0] = h->a[--h->size];
+
+    int i = 0;
+
+    while (1) {
+        int l = 2 * i + 1;
+        int r = 2 * i + 2;
+        int m = i;
+
+        if (l < h->size &&
+            h->a[l].score > h->a[m].score)
+            m = l;
+
+        if (r < h->size &&
+            h->a[r].score > h->a[m].score)
+            m = r;
+
+        if (m == i)
+            break;
+
+        HeapItem t = h->a[i];
+        h->a[i] = h->a[m];
+        h->a[m] = t;
+
+        i = m;
+    }
+
+    return top;
+}
+
+/* Find node number */
+int findNode(const char *name) {
+    if (name[0] == 'W')
+        return name[1] - '1';
+
+    return 3 + (name[1] - '1');
+}
+
+/* Check route cache */
+int cachedRoute(int warehouseNode, int zoneNode,
+                int load, int *distance) {
+
+    for (int i = 0; i < cacheCount; i++) {
+
+        if (cache[i].valid &&
+            cache[i].warehouseNode == warehouseNode &&
+            cache[i].zoneNode == zoneNode &&
+            cache[i].load == load) {
+
+            *distance = cache[i].distance;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* Dijkstra shortest path with capacity constraint */
+int dijkstra(const Graph *g, int src, int dst,
+             int load, int *distance) {
+
+    int dist[MAX_NODES];
+    int used[MAX_NODES] = {0};
+
+    for (int i = 0; i < MAX_NODES; i++)
+        dist[i] = INF;
+
+    dist[src] = 0;
+
+    for (int step = 0; step < MAX_NODES; step++) {
+
+        int u = -1;
+
+        for (int i = 0; i < MAX_NODES; i++) {
+
+            if (!used[i] &&
+                dist[i] < INF &&
+                (u == -1 || dist[i] < dist[u])) {
+
+                u = i;
+            }
+        }
+
+        if (u == -1)
+            break;
+
+        used[u] = 1;
+
+        for (int j = 0; j < g->count[u]; j++) {
+
+            Edge e = g->edges[u][j];
+
+            /* Ignore routes with insufficient capacity */
+            if (e.capacity < load)
+                continue;
+
+            if (dist[e.to] >
+                dist[u] + e.distance) {
+
+                dist[e.to] =
+                    dist[u] + e.distance;
+            }
+        }
+    }
+
+    *distance = dist[dst];
+
+    return dist[dst] < INF;
+}
+
+/* Get route using cache or Dijkstra */
+int getRoute(const Graph *g, int w, int z,
+             int load, int *distance) {
+
+    if (cachedRoute(w, z, load, distance))
+        return 1;
+
+    if (!dijkstra(g, w, z, load, distance))
+        return 0;
+
+    if (cacheCount < MAX_CACHE) {
+
+        cache[cacheCount++] =
+            (RouteCache){z, w, load,
+                         *distance, -1, 1};
+    }
+
+    return 1;
+}
+
+/* Calculate priority score */
+double priorityScore(const ZoneRequest *z,
+                      int distance,
+                      int strategy) {
+
+    double demandScore = z->demand * 1.0;
+
+    double distanceScore =
+        100.0 -
+        (distance > 100 ? 100.0 : distance);
+
+    /* Urgency First */
+    if (strategy == 1)
+        return z->urgency * 100.0;
+
+    /* Demand First */
+    if (strategy == 2)
+        return demandScore * 10.0;
+
+    /* Distance First */
+    if (strategy == 3)
+        return distanceScore * 100.0;
+
+    /* Hybrid + Aging */
+    return 0.50 * z->urgency
+         + 0.25 * demandScore
+         + 0.25 * distanceScore
+         + 4.0 * z->waiting;
+}
+
+/* Build priority queue */
+void buildHeap(MaxHeap *h,
+               ZoneRequest zones[],
+               int n,
+               int strategy) {
+
+    heapInit(h);
+
+    for (int i = 0; i < n; i++) {
+
+        int bestDist = zones[i].served;
+
+        zones[i].priority =
+            priorityScore(&zones[i],
+                          bestDist,
+                          strategy);
+
+        heapPush(h,
+                 i,
+                 (int)(zones[i].priority * 100));
+    }
+}
+
+/* Print selected route */
+void printRoute(int w,
+                const char *zoneId,
+                int distance,
+                int delivered) {
+
+    printf("  Route W%d -> %s | %d km | Load %d units\n",
+           w + 1,
+           zoneId,
+           distance,
+           delivered);
+}
+
+int main(void) {
+
+    Graph g = {0};
+
+    /* Warehouse to disaster-zone connections */
+    addEdge(&g, 0, 3, 12, 80);
+    addEdge(&g, 0, 4, 18, 50);
+    addEdge(&g, 1, 4, 10, 70);
+    addEdge(&g, 1, 5, 16, 60);
+    addEdge(&g, 2, 3, 20, 100);
+    addEdge(&g, 2, 5, 14, 50);
+
+    /* Inter-zone routes */
+    addEdge(&g, 3, 4, 8, 40);
+    addEdge(&g, 4, 5, 9, 35);
+    addEdge(&g, 5, 6, 7, 30);
+    addEdge(&g, 3, 6, 15, 25);
+    addEdge(&g, 4, 6, 11, 45);
+    addEdge(&g, 2, 6, 22, 60);
+
+    /* Warehouse stock */
+    Warehouse base[MAX_WAREHOUSES] = {
+        {"W1", 120},
+        {"W2", 100},
+        {"W3", 90}
+    };
+
+    /* Disaster-zone requests */
+    ZoneRequest original[MAX_ZONES] = {
+
+        {"Z1", "Riverbank Colony",
+         3, 70, 92, 0, 0, 0},
+
+        {"Z2", "Hillview Camp",
+         4, 45, 65, 0, 0, 0},
+
+        {"Z3", "Market Shelter",
+         5, 80, 78, 0, 0, 0},
+
+        {"Z4", "East Village",
+         6, 60, 88, 0, 0, 0},
+
+        {"Z5", "Bridge Settlement",
+         4, 35, 55, 0, 0, 0}
+    };
+
+    int n = 5;
+
+    printf("========== INTELLIGENT DISASTER-RELIEF SUPPLY CHAIN ==========\n");
+
+    printf("Zones: %d | Warehouses: %d | "
+           "Capacity-aware graph routing enabled\n\n",
+           n, 3);
+
+    /* Find nearest feasible distances */
+    printf("Nearest feasible distances used for ranking:\n");
+
+    for (int i = 0; i < n; i++) {
+
+        int best = INF;
+
+        for (int w = 0; w < 3; w++) {
+
+            int d;
+
+            if (dijkstra(&g,
+                         w,
+                         original[i].node,
+                         20,
+                         &d) &&
+                d < best) {
+
+                best = d;
+            }
+        }
+
+        original[i].served = best;
+
+        printf("%s %-20s demand=%3d urgency=%3d nearest=%3d km\n",
+               original[i].id,
+               original[i].name,
+               original[i].demand,
+               original[i].urgency,
+               best);
+    }
+
+    /* Compare strategies */
+    printf("\n--- STRATEGY COMPARISON ---\n");
+
+    const char *sname[] = {
+        "",
+        "Urgency-First",
+        "Demand-First",
+        "Distance-First",
+        "Hybrid + Aging"
+    };
+
+    for (int s = 1; s <= 4; s++) {
+
+        ZoneRequest z[MAX_ZONES];
+
+        memcpy(z,
+               original,
+               sizeof(z));
+
+        MaxHeap h;
+
+        buildHeap(&h,
+                  z,
+                  n,
+                  s);
+
+        printf("%s: ",
+               sname[s]);
+
+        while (h.size) {
+
+            printf("%s ",
+                   z[heapPop(&h).zoneIndex].id);
+        }
+
+        printf("\n");
+    }
+
+    /* Dynamic re-prioritization */
+    printf("\n--- DYNAMIC RE-PRIORITIZATION ---\n");
+
+    ZoneRequest zones[MAX_ZONES];
+
+    memcpy(zones,
+           original,
+           sizeof(zones));
+
+    zones[3].urgency = 99;
+    zones[3].waiting = 2;
+
+    printf("Update: Z4 urgency increased to %d "
+           "after a simulated flood warning.\n",
+           zones[3].urgency);
+
+    MaxHeap heap;
+
+    buildHeap(&heap,
+              zones,
+              n,
+              4);
+
+    int stock[3] = {
+        base[0].stock,
+        base[1].stock,
+        base[2].stock
+    };
+
+    int vehicleCapacity = 50;
+
+    int totalDemand = 0;
+    int totalDelivered = 0;
+    int totalDistance = 0;
+    int servedZones = 0;
+
+    printf("\n--- DISPATCH PLAN (HYBRID + AGING) ---\n");
+
+    while (heap.size) {
+
+        int idx =
+            heapPop(&heap).zoneIndex;
+
+        ZoneRequest *z =
+            &zones[idx];
+
+        int load =
+            z->demand < vehicleCapacity
+            ? z->demand
+            : vehicleCapacity;
+
+        int bestW = -1;
+        int bestD = INF;
+
+        /* Select best warehouse */
+        for (int w = 0; w < 3; w++) {
+
+            if (stock[w] <= 0)
+                continue;
+
+            int feasibleLoad =
+                load < stock[w]
+                ? load
+                : stock[w];
+
+            if (feasibleLoad <= 0)
+                continue;
+
+            int d;
+
+            if (getRoute(&g,
+                         w,
+                         z->node,
+                         feasibleLoad,
+                         &d) &&
+                d < bestD) {
+
+                bestD = d;
+                bestW = w;
+            }
+        }
+
+        totalDemand += z->demand;
+
+        if (bestW == -1) {
+
+            printf("%s %s -> "
+                   "DEFERRED "
+                   "(no feasible capacity route)\n",
+                   z->id,
+                   z->name);
+
+            continue;
+        }
+
+        int delivered =
+            load < stock[bestW]
+            ? load
+            : stock[bestW];
+
+        stock[bestW] -= delivered;
+
+        z->served = delivered;
+
+        totalDelivered += delivered;
+        totalDistance += bestD;
+        servedZones++;
+
+        printf("%s %-20s urgency=%3d score=%7.2f\n",
+               z->id,
+               z->name,
+               z->urgency,
+               z->priority);
+
+        printRoute(bestW,
+                   z->id,
+                   bestD,
+                   delivered);
+    }
+
+    /* Summary */
+    printf("\n--- SUMMARY ---\n");
+
+    printf("Total requested : %d units\n",
+           totalDemand);
+
+    printf("Total delivered  : %d units\n",
+           totalDelivered);
+
+    printf("Zones dispatched : %d/%d\n",
+           servedZones,
+           n);
+
+    printf("Travel distance  : %d km "
+           "(sum of selected routes)\n",
+           totalDistance);
+
+    printf("Fulfilment ratio : %.1f%%\n",
+           100.0 * totalDelivered /
+           totalDemand);
+
+    /* Route cache test */
+    printf("\n--- HASH-LIKE ROUTE CACHE CHECK ---\n");
+
+    int d;
+
+    if (getRoute(&g,
+                 0,
+                 4,
+                 20,
+                 &d)) {
+
+        printf("Cached route W1 -> Z2 available: "
+               "%d km\n",
+               d);
+    }
+
+    if (getRoute(&g,
+                 0,
+                 4,
+                 20,
+                 &d)) {
+
+        printf("Repeated query reused cached distance: "
+               "%d km\n",
+               d);
+    }
+
+    /* Performance test */
+    printf("\n--- PERFORMANCE TREND (ROUTE QUERIES) ---\n");
+
+    int sizes[] = {
+        1000,
+        5000,
+        10000,
+        20000
+    };
+
+    for (int k = 0; k < 4; k++) {
+
+        clock_t st = clock();
+
+        volatile int sink = 0;
+
+        for (int i = 0;
+             i < sizes[k];
+             i++) {
+
+            int dist;
+
+            sink += dijkstra(&g,
+                             0,
+                             4,
+                             20,
+                             &dist);
+        }
+
+        clock_t en = clock();
+
+        printf("%5d queries -> %.6f sec\n",
+               sizes[k],
+               (double)(en - st) /
+               CLOCKS_PER_SEC);
+
+        (void)sink;
+    }
+
+    return 0;
+}
